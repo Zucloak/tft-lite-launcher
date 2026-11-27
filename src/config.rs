@@ -357,6 +357,29 @@ impl AppConfig {
             let _ = parsed.save();
         }
 
+        // Redirect to a drive with sufficient free space when the configured SDK path
+        // is on a volume that has less than 8 GB available and no SDK is provisioned there
+        // yet. This handles the common case where Windows AppData is on a full C: drive.
+        let sdk_not_provisioned = !parsed.sdk_dir.join("jdk").exists()
+            && !parsed.sdk_dir.join("cmdline-tools").exists()
+            && !parsed.sdk_dir.join("avd").exists();
+        if sdk_not_provisioned {
+            let drives = detect_storage_drives();
+            let on_low_drive = find_drive_for_path(&parsed.sdk_dir, &drives)
+                .map(|d| d.available_bytes < MIN_SDK_FREE_BYTES)
+                .unwrap_or(false);
+            if on_low_drive {
+                let better = drives
+                    .iter()
+                    .filter(|d| d.available_bytes >= MIN_SDK_FREE_BYTES)
+                    .max_by_key(|d| d.available_bytes);
+                if let Some(best) = better {
+                    parsed.sdk_dir = best.sdk_dir.clone();
+                    let _ = parsed.save();
+                }
+            }
+        }
+
         parsed.sanitize();
         Ok(parsed)
     }

@@ -683,6 +683,7 @@ fn patch_avd_config_ini(ini_path: &Path, config: &AppConfig) -> Result<(), SdkEr
                 && !line.starts_with("hw.lcd.width=")
                 && !line.starts_with("hw.lcd.height=")
                 && !line.starts_with("hw.lcd.density=")
+                && !line.starts_with("PlayStore.enabled=")
         })
         .map(ToOwned::to_owned)
         .collect();
@@ -696,6 +697,10 @@ fn patch_avd_config_ini(ini_path: &Path, config: &AppConfig) -> Result<(), SdkEr
     lines.push("hw.lcd.width=1920".to_owned());
     lines.push("hw.lcd.height=1080".to_owned());
     lines.push("hw.lcd.density=240".to_owned());
+    // Required for Google Play certification — avdmanager always writes "no" but the
+    // emulator only sets PlayStore.enabled=true in hardware-qemu.ini when this is "yes".
+    // Without it Google Play Services marks the device as uncertified and blocks downloads.
+    lines.push("PlayStore.enabled = yes".to_owned());
 
     io_ctx(
         "writing AVD config",
