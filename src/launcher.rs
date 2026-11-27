@@ -178,9 +178,12 @@ fn run_launch_pipeline(
         )));
     }
 
-    let child = emulator_cmd
-        .spawn()
-        .map_err(|err| format!("Failed to launch Android emulator: {err}"))?;
+    let child = emulator_cmd.spawn().map_err(|err| {
+        format!(
+            "Failed to launch Android emulator ({}): {err}",
+            paths.emulator().display()
+        )
+    })?;
 
     if let Ok(mut guard) = child_slot.lock() {
         *guard = Some(child);

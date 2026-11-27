@@ -1,5 +1,5 @@
 ﻿use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,20 @@ use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 pub const DEFAULT_AVD_NAME: &str = "TFT_Device";
 pub const MIN_CPU_CORES: u32 = 2;
 pub const MAX_CPU_CORES: u32 = 8;
+
+/// Returns the default user-writable Android SDK storage directory
+/// (e.g. `%LOCALAPPDATA%\tft-lite-launcher\android-sdk` on Windows).
+pub fn default_sdk_dir() -> PathBuf {
+    if let Some(base) = dirs::data_local_dir().or_else(dirs::config_dir) {
+        return base.join("tft-lite-launcher").join("android-sdk");
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            return parent.join("android-sdk");
+        }
+    }
+    PathBuf::from("./android-sdk")
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -123,7 +137,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         let hw = detect_host_hardware();
         Self {
-            sdk_dir: PathBuf::from("./android-sdk"),
+            sdk_dir: default_sdk_dir(),
             avd_name: DEFAULT_AVD_NAME.to_owned(),
             cpu_cores: hw.recommended_cores,
             ram_mb: hw.recommended_ram_mb,
@@ -174,6 +188,20 @@ impl AppConfig {
         let mut parsed: Self = toml::from_str(&raw)
             .with_context(|| format!("Failed to parse TOML config at {}", path.display()))?;
 
+        // Migrate legacy relative `./android-sdk` defaults so launching from
+        // protected or non-writable directories (such as System32 or Program Files)
+        // does not fail with Access Denied unless a portable SDK was already provisioned there.
+        let is_legacy_relative = parsed.sdk_dir == Path::new("./android-sdk")
+            || parsed.sdk_dir == Path::new("android-sdk");
+        if is_legacy_relative
+            && !parsed.sdk_dir.join("jdk").exists()
+            && !parsed.sdk_dir.join("cmdline-tools").exists()
+            && !parsed.sdk_dir.join("avd").exists()
+        {
+            parsed.sdk_dir = default_sdk_dir();
+            let _ = parsed.save();
+        }
+
         parsed.sanitize();
         Ok(parsed)
     }
@@ -193,6 +221,9 @@ impl AppConfig {
     }
 
     pub fn sanitize(&mut self) {
+        if self.sdk_dir.as_os_str().is_empty() {
+            self.sdk_dir = default_sdk_dir();
+        }
         self.cpu_cores = self.cpu_cores.clamp(MIN_CPU_CORES, MAX_CPU_CORES);
         self.ram_mb = self.ram_mb.clamp(2048, 16384);
         for bind in &mut self.keybinds {
@@ -203,5 +234,27 @@ impl AppConfig {
                 bind.key = "D".to_owned();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_sdk_dir_targets_app_folder() {
+        let dir = default_sdk_dir();
+        assert!(dir.ends_with(Path::new("tft-lite-launcher").join("android-sdk"))
+            || dir.ends_with("android-sdk"));
+    }
+
+    #[test]
+    fn sanitize_restores_empty_sdk_dir() {
+        let mut cfg = AppConfig {
+            sdk_dir: PathBuf::new(),
+            ..AppConfig::default()
+        };
+        cfg.sanitize();
+        assert!(!cfg.sdk_dir.as_os_str().is_empty());
     }
 }

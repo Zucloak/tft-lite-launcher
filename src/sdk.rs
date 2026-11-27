@@ -46,8 +46,38 @@ pub enum SdkError {
         stderr: String,
     },
 
+    #[error("I/O error while {action} '{}': {source}", path.display())]
+    IoPath {
+        action: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
+}
+
+fn io_ctx<T>(action: &'static str, path: &Path, res: io::Result<T>) -> Result<T, SdkError> {
+    res.map_err(|source| SdkError::IoPath {
+        action,
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,10 +181,12 @@ impl SdkPaths {
         self.root.join("jdk")
     }
 
-    /// Canonicalized `JAVA_HOME` path injected into `sdkmanager` and `avdmanager`.
+    /// Canonicalized `JAVA_HOME` path injected into `sdkmanager` and `avdmanager`
+    /// without Windows `\\?\` verbatim prefixes that break batch scripts.
     pub fn canonical_jdk_home(&self) -> PathBuf {
         let dir = self.jdk_dir();
-        fs::canonicalize(&dir).unwrap_or(dir)
+        let resolved = fs::canonicalize(&dir).unwrap_or(dir);
+        strip_windows_verbatim_prefix(resolved)
     }
 
     /// Predictable flattened Java executable (`./android-sdk/jdk/bin/java` or `java.exe`).
@@ -227,8 +259,8 @@ where
     let target = HostTarget::detect()?;
     let paths = SdkPaths::from_config(config);
 
-    fs::create_dir_all(&paths.root)?;
-    fs::create_dir_all(&paths.avd_home)?;
+    io_ctx("creating SDK root directory", &paths.root, fs::create_dir_all(&paths.root))?;
+    io_ctx("creating AVD directory", &paths.avd_home, fs::create_dir_all(&paths.avd_home))?;
 
     if !paths.java_bin().exists() {
         report(0.06, "Fetching portable OpenJDK 17 runtime...");
@@ -296,7 +328,7 @@ fn download_url_to_file(url: &str, dest_path: &Path) -> Result<(), SdkError> {
         });
     }
 
-    let mut out_file = File::create(dest_path)?;
+    let mut out_file = io_ctx("creating download file", dest_path, File::create(dest_path))?;
     io::copy(&mut response, &mut out_file)?;
     out_file.flush()?;
     Ok(())
@@ -304,7 +336,7 @@ fn download_url_to_file(url: &str, dest_path: &Path) -> Result<(), SdkError> {
 
 /// Downloads Eclipse Temurin OpenJDK 17 from Adoptium and flattens its
 /// top-level versioned folder (and macOS `Contents/Home` if present) directly
-/// into `./android-sdk/jdk` while enforcing zip-slip path traversal protection.
+/// into `android-sdk/jdk` while enforcing zip-slip path traversal protection.
 fn download_and_extract_portable_jdk(
     target: &HostTarget,
     paths: &SdkPaths,
@@ -315,13 +347,13 @@ fn download_and_extract_portable_jdk(
 
     let jdk_dir = paths.jdk_dir();
     if jdk_dir.exists() {
-        fs::remove_dir_all(&jdk_dir)?;
+        io_ctx("clearing existing JDK directory", &jdk_dir, fs::remove_dir_all(&jdk_dir))?;
     }
-    fs::create_dir_all(&jdk_dir)?;
+    io_ctx("creating JDK directory", &jdk_dir, fs::create_dir_all(&jdk_dir))?;
 
     let mut magic = [0u8; 4];
     {
-        let mut probe = File::open(&archive_path)?;
+        let mut probe = io_ctx("opening JDK archive", &archive_path, File::open(&archive_path))?;
         let _ = probe.read(&mut magic)?;
     }
 
@@ -492,50 +524,52 @@ fn download_and_extract_cmdline_tools(target: &HostTarget, sdk_root: &Path) -> R
     // sdkmanager expects binaries under <ANDROID_HOME>/cmdline-tools/latest/bin.
     let latest_dir = sdk_root.join("cmdline-tools").join("latest");
     if latest_dir.exists() {
-        fs::remove_dir_all(&latest_dir)?;
+        io_ctx("clearing existing cmdline-tools directory", &latest_dir, fs::remove_dir_all(&latest_dir))?;
     }
-    fs::create_dir_all(&latest_dir)?;
+    io_ctx("creating cmdline-tools directory", &latest_dir, fs::create_dir_all(&latest_dir))?;
 
-    let archive_file = File::open(&zip_path)?;
-    let mut archive = ZipArchive::new(archive_file)?;
+    {
+        let archive_file = io_ctx("opening cmdline-tools archive", &zip_path, File::open(&zip_path))?;
+        let mut archive = ZipArchive::new(archive_file)?;
 
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
-        let Some(enclosed) = entry.enclosed_name().map(PathBuf::from) else {
-            continue;
-        };
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            let Some(enclosed) = entry.enclosed_name().map(PathBuf::from) else {
+                continue;
+            };
 
-        let relative = enclosed
-            .strip_prefix("cmdline-tools")
-            .unwrap_or(&enclosed);
-        if relative.as_os_str().is_empty() {
-            continue;
-        }
+            let relative = enclosed
+                .strip_prefix("cmdline-tools")
+                .unwrap_or(&enclosed);
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
 
-        let dest_path = latest_dir.join(relative);
-        if entry.is_dir() {
-            fs::create_dir_all(&dest_path)?;
-            continue;
-        }
+            let dest_path = latest_dir.join(relative);
+            if entry.is_dir() {
+                fs::create_dir_all(&dest_path)?;
+                continue;
+            }
 
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
 
-        let mut dest_file = File::create(&dest_path)?;
-        io::copy(&mut entry, &mut dest_file)?;
+            let mut dest_file = File::create(&dest_path)?;
+            io::copy(&mut entry, &mut dest_file)?;
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = entry.unix_mode().unwrap_or_else(|| {
-                if relative.starts_with("bin") {
-                    0o755
-                } else {
-                    0o644
-                }
-            });
-            fs::set_permissions(&dest_path, fs::Permissions::from_mode(mode))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = entry.unix_mode().unwrap_or_else(|| {
+                    if relative.starts_with("bin") {
+                        0o755
+                    } else {
+                        0o644
+                    }
+                });
+                fs::set_permissions(&dest_path, fs::Permissions::from_mode(mode))?;
+            }
         }
     }
 
@@ -586,7 +620,7 @@ fn create_tft_avd(
 
 fn patch_avd_config_ini(ini_path: &Path, config: &AppConfig) -> Result<(), SdkError> {
     let existing = if ini_path.exists() {
-        fs::read_to_string(ini_path)?
+        io_ctx("reading AVD config", ini_path, fs::read_to_string(ini_path))?
     } else {
         String::new()
     };
@@ -616,7 +650,11 @@ fn patch_avd_config_ini(ini_path: &Path, config: &AppConfig) -> Result<(), SdkEr
     lines.push("hw.lcd.height=1080".to_owned());
     lines.push("hw.lcd.density=240".to_owned());
 
-    fs::write(ini_path, format!("{}\n", lines.join("\n")))?;
+    io_ctx(
+        "writing AVD config",
+        ini_path,
+        fs::write(ini_path, format!("{}\n", lines.join("\n"))),
+    )?;
     Ok(())
 }
 
@@ -654,7 +692,14 @@ pub fn run_sdk_cmd(
         cmd.stdin(Stdio::piped());
     }
 
-    let mut child = cmd.spawn()?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = io_ctx("spawning SDK tool", program, cmd.spawn())?;
     if let Some(payload) = stdin_payload {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(payload.as_bytes());
@@ -719,6 +764,25 @@ mod tests {
         assert_eq!(
             flatten_jdk_relative_path(Path::new("jdk-17.0.13+11-jre/../../etc/passwd")),
             None
+        );
+    }
+
+    #[test]
+    fn strip_windows_verbatim_prefix_normalizes_paths() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_windows_verbatim_prefix(PathBuf::from(r"\\?\C:\Users\Test\jdk")),
+                PathBuf::from(r"C:\Users\Test\jdk")
+            );
+            assert_eq!(
+                strip_windows_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\jdk")),
+                PathBuf::from(r"\\server\share\jdk")
+            );
+        }
+        assert_eq!(
+            strip_windows_verbatim_prefix(PathBuf::from("/tmp/android-sdk/jdk")),
+            PathBuf::from("/tmp/android-sdk/jdk")
         );
     }
 }
