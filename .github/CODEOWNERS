@@ -1,0 +1,4 @@
+# Require explicit maintainer review on every pull request touching any file.
+# Replace `@OWNER` with your GitHub username (e.g., `@your-github-handle`)
+# and enable "Require review from Code Owners" in Settings -> Branches -> main.
+* @OWNER

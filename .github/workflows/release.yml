@@ -1,0 +1,162 @@
+name: Build & Release
+
+# Security: Never trigger on `pull_request` or `pull_request_target` so untrusted
+# forks cannot run code, exfiltrate secrets, or poison build caches.
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Strict least-privilege default: grant zero permissions at workflow level.
+permissions: {}
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: TFT-Lite-Launcher-windows-x86_64
+            output_file: TFT-Lite-Launcher-windows-x86_64.exe
+            bin: tft-lite-launcher.exe
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: TFT-Lite-Launcher-macos-arm64
+            output_file: TFT-Lite-Launcher-macos-arm64.tar.gz
+            bin: tft-lite-launcher
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact_name: TFT-Lite-Launcher-macos-x86_64
+            output_file: TFT-Lite-Launcher-macos-x86_64.tar.gz
+            bin: tft-lite-launcher
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact_name: TFT-Lite-Launcher-linux-x86_64
+            output_file: TFT-Lite-Launcher-linux-x86_64.tar.gz
+            bin: tft-lite-launcher
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6122fe5c721799fb1455655b6ef0c2057d425b0d # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@f0deed94b152ade964d4484501a350e930164c45 # v2.7.7
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install Linux GUI and input development libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libgl1-mesa-dev \
+            libxdo-dev \
+            pkg-config
+
+      - name: Fetch embedded Inter and JetBrains Mono fonts
+        shell: bash
+        run: |
+          mkdir -p assets/fonts
+          if [ ! -f assets/fonts/Inter-Regular.ttf ]; then
+            curl -fsSL -o assets/fonts/Inter-Regular.ttf \
+              "https://raw.githubusercontent.com/google/fonts/main/ofl/inter/static/Inter_18pt-Regular.ttf"
+          fi
+          if [ ! -f assets/fonts/JetBrainsMono-Regular.ttf ]; then
+            curl -fsSL -o assets/fonts/JetBrainsMono-Regular.ttf \
+              "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/master/fonts/ttf/JetBrainsMono-Regular.ttf"
+          fi
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "${{ matrix.output_file }}"
+
+      - name: Package Unix binary archive
+        if: runner.os != 'Windows'
+        run: |
+          tar -czf "${{ matrix.output_file }}" \
+            -C "target/${{ matrix.target }}/release" "${{ matrix.bin }}" \
+            -C "${{ github.workspace }}" LICENSE README.md SECURITY.md
+
+      - name: Upload downloadable workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.output_file }}
+          retention-days: 30
+
+  checksums:
+    name: Generate SHA-256 Checksums
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions: {}
+    steps:
+      - name: Download compiled platform artifacts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute SHA256SUMS.txt
+        working-directory: dist
+        run: |
+          sha256sum \
+            TFT-Lite-Launcher-windows-x86_64.exe \
+            TFT-Lite-Launcher-macos-arm64.tar.gz \
+            TFT-Lite-Launcher-macos-x86_64.tar.gz \
+            TFT-Lite-Launcher-linux-x86_64.tar.gz \
+            > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload SHA256SUMS.txt artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: SHA256SUMS
+          path: dist/SHA256SUMS.txt
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs: [build, checksums]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all release artifacts and checksums
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.8
+        with:
+          generate_release_notes: true
+          files: dist/*
