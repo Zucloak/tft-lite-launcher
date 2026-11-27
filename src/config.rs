@@ -1,19 +1,174 @@
-﻿use std::fs;
+﻿use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
 
 pub const DEFAULT_AVD_NAME: &str = "TFT_Device";
 pub const MIN_CPU_CORES: u32 = 2;
 pub const MAX_CPU_CORES: u32 = 8;
+pub const MIN_SDK_FREE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
-/// Returns the default user-writable Android SDK storage directory
-/// (e.g. `%LOCALAPPDATA%\tft-lite-launcher\android-sdk` on Windows).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageDrive {
+    pub mount_point: PathBuf,
+    pub display_name: String,
+    pub available_bytes: u64,
+    pub total_bytes: u64,
+    pub sdk_dir: PathBuf,
+}
+
+pub fn format_bytes_gb(bytes: u64) -> String {
+    let gb = (bytes as f64) / (1024.0 * 1024.0 * 1024.0);
+    format!("{gb:.1} GB")
+}
+
+fn os_default_sdk_dir() -> Option<PathBuf> {
+    dirs::data_local_dir()
+        .or_else(dirs::config_dir)
+        .map(|base| base.join("tft-lite-launcher").join("android-sdk"))
+}
+
+fn format_drive_label(name: &OsStr, mount_point: &Path) -> String {
+    let vol_name = name.to_string_lossy().trim().to_owned();
+    let mount_str = mount_point.to_string_lossy();
+    let clean_mount = mount_str.trim_end_matches('\\');
+    let short_mount = if clean_mount.is_empty() {
+        mount_str.as_ref()
+    } else {
+        clean_mount
+    };
+
+    if vol_name.is_empty() || vol_name == short_mount {
+        if cfg!(windows) {
+            format!("Drive ({short_mount})")
+        } else {
+            short_mount.to_owned()
+        }
+    } else {
+        format!("{vol_name} ({short_mount})")
+    }
+}
+
+fn should_skip_mount(mount_point: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let s = mount_point.to_string_lossy();
+        if s.starts_with("/boot")
+            || s.starts_with("/snap")
+            || s.starts_with("/sys")
+            || s.starts_with("/proc")
+            || s.starts_with("/dev")
+            || s.starts_with("/run")
+            || s.starts_with("/System/Volumes")
+            || s.starts_with("/private/var")
+        {
+            return true;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = mount_point;
+    false
+}
+
+/// Enumerates writable host storage drives along with free space and the
+/// recommended Android SDK directory on each drive.
+pub fn detect_storage_drives() -> Vec<StorageDrive> {
+    let disks = Disks::new_with_refreshed_list();
+    let os_default = os_default_sdk_dir();
+    let mut seen_mounts = HashSet::new();
+    let mut raw_mounts: Vec<(PathBuf, String, u64, u64)> = Vec::new();
+
+    for disk in disks.list() {
+        if disk.is_read_only() || disk.total_space() == 0 {
+            continue;
+        }
+        let mount = disk.mount_point().to_path_buf();
+        if should_skip_mount(&mount) || !seen_mounts.insert(mount.clone()) {
+            continue;
+        }
+        raw_mounts.push((
+            mount.clone(),
+            format_drive_label(disk.name(), &mount),
+            disk.available_space(),
+            disk.total_space(),
+        ));
+    }
+
+    // Match the longest mount prefix for `os_default` so Linux/macOS split mounts
+    // (e.g. `/` vs `/home`) place the OS default folder on the actual owning volume.
+    let os_default_mount = os_default.as_ref().and_then(|def| {
+        raw_mounts
+            .iter()
+            .filter(|(m, _, _, _)| def.starts_with(m))
+            .max_by_key(|(m, _, _, _)| m.as_os_str().len())
+            .map(|(m, _, _, _)| m.clone())
+    });
+
+    let mut drives: Vec<StorageDrive> = raw_mounts
+        .into_iter()
+        .map(|(mount_point, display_name, available_bytes, total_bytes)| {
+            let sdk_dir = match (&os_default, &os_default_mount) {
+                (Some(def), Some(owner)) if owner == &mount_point => def.clone(),
+                _ => mount_point.join("TFT-Lite-Launcher").join("android-sdk"),
+            };
+            StorageDrive {
+                mount_point,
+                display_name,
+                available_bytes,
+                total_bytes,
+                sdk_dir,
+            }
+        })
+        .collect();
+
+    drives.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
+    drives
+}
+
+/// Finds the storage drive hosting `path` by matching the longest mount-point prefix.
+pub fn find_drive_for_path<'a>(
+    path: &Path,
+    drives: &'a [StorageDrive],
+) -> Option<&'a StorageDrive> {
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+
+    drives
+        .iter()
+        .filter(|drive| resolved.starts_with(&drive.mount_point))
+        .max_by_key(|drive| drive.mount_point.as_os_str().len())
+}
+
+/// Returns the default user-writable Android SDK storage directory, preferring
+/// the drive with sufficient free space when the OS default volume is tight.
 pub fn default_sdk_dir() -> PathBuf {
-    if let Some(base) = dirs::data_local_dir().or_else(dirs::config_dir) {
-        return base.join("tft-lite-launcher").join("android-sdk");
+    let drives = detect_storage_drives();
+    if let Some(os_def) = os_default_sdk_dir() {
+        if let Some(current_drive) = find_drive_for_path(&os_def, &drives) {
+            if current_drive.available_bytes < MIN_SDK_FREE_BYTES {
+                if let Some(best) = drives
+                    .iter()
+                    .filter(|d| d.available_bytes >= MIN_SDK_FREE_BYTES)
+                    .max_by_key(|d| d.available_bytes)
+                {
+                    return best.sdk_dir.clone();
+                }
+            }
+        }
+        return os_def;
+    }
+
+    if let Some(best) = drives.iter().max_by_key(|d| d.available_bytes) {
+        return best.sdk_dir.clone();
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
@@ -244,8 +399,64 @@ mod tests {
     #[test]
     fn default_sdk_dir_targets_app_folder() {
         let dir = default_sdk_dir();
-        assert!(dir.ends_with(Path::new("tft-lite-launcher").join("android-sdk"))
-            || dir.ends_with("android-sdk"));
+        assert!(
+            dir.ends_with(Path::new("tft-lite-launcher").join("android-sdk"))
+                || dir.ends_with(Path::new("TFT-Lite-Launcher").join("android-sdk"))
+                || dir.ends_with("android-sdk")
+        );
+    }
+
+    #[test]
+    fn format_drive_label_handles_windows_and_unix_styles() {
+        let label = format_drive_label(OsStr::new("Datadisk"), Path::new("D:\\"));
+        if cfg!(windows) {
+            assert_eq!(label, "Datadisk (D:)");
+        } else {
+            assert!(label.contains("Datadisk"));
+        }
+        assert_eq!(format_bytes_gb(4 * 1024 * 1024 * 1024), "4.0 GB");
+    }
+
+    #[test]
+    fn find_drive_for_path_picks_longest_mount_prefix() {
+        #[cfg(windows)]
+        let (root_a, root_b, query, expected) = (
+            PathBuf::from("C:\\"),
+            PathBuf::from("D:\\"),
+            PathBuf::from("d:/TFT-Lite-Launcher/android-sdk"),
+            "Datadisk (D:)",
+        );
+        #[cfg(not(windows))]
+        let (root_a, root_b, query, expected) = (
+            PathBuf::from("/"),
+            PathBuf::from("/mnt/data"),
+            PathBuf::from("/mnt/data/TFT-Lite-Launcher/android-sdk"),
+            "Data (/mnt/data)",
+        );
+
+        let drives = vec![
+            StorageDrive {
+                mount_point: root_a.clone(),
+                display_name: if cfg!(windows) {
+                    "Local Disk (C:)".to_owned()
+                } else {
+                    "/".to_owned()
+                },
+                available_bytes: 5_000_000_000,
+                total_bytes: 50_000_000_000,
+                sdk_dir: root_a.join("android-sdk"),
+            },
+            StorageDrive {
+                mount_point: root_b.clone(),
+                display_name: expected.to_owned(),
+                available_bytes: 400_000_000_000,
+                total_bytes: 1_000_000_000_000,
+                sdk_dir: root_b.join("TFT-Lite-Launcher").join("android-sdk"),
+            },
+        ];
+
+        let found = find_drive_for_path(&query, &drives).expect("expected drive match");
+        assert_eq!(found.display_name, expected);
     }
 
     #[test]

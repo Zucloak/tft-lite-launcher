@@ -155,12 +155,18 @@ fn run_launch_pipeline(
         emulator_args.extend(["-window-size", "1600,900"]);
     }
 
+    let tmp_dir = paths.tmp_dir();
+    let _ = std::fs::create_dir_all(&tmp_dir);
+
     let mut emulator_cmd = Command::new(paths.emulator());
     emulator_cmd
         .args(&emulator_args)
         .env("ANDROID_HOME", &paths.root)
         .env("ANDROID_SDK_ROOT", &paths.root)
         .env("ANDROID_AVD_HOME", &paths.avd_home)
+        .env("TMP", &tmp_dir)
+        .env("TEMP", &tmp_dir)
+        .env("TMPDIR", &tmp_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 

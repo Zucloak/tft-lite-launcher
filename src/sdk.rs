@@ -10,7 +10,9 @@ use tar::Archive as TarArchive;
 use thiserror::Error;
 use zip::ZipArchive;
 
-use crate::config::AppConfig;
+use crate::config::{
+    detect_storage_drives, find_drive_for_path, format_bytes_gb, AppConfig, MIN_SDK_FREE_BYTES,
+};
 
 /// Official Google Android Command Line Tools revision (no proprietary binaries bundled).
 const CMDLINE_TOOLS_REV: &str = "11076708";
@@ -44,6 +46,13 @@ pub enum SdkError {
         program: String,
         code: i32,
         stderr: String,
+    },
+
+    #[error("Insufficient disk space at '{}' ({} free, at least {} required). Select another drive in Launcher or Settings.", path.display(), format_bytes_gb(*available_bytes), format_bytes_gb(*required_bytes))]
+    InsufficientDiskSpace {
+        path: PathBuf,
+        available_bytes: u64,
+        required_bytes: u64,
     },
 
     #[error("I/O error while {action} '{}': {source}", path.display())]
@@ -235,6 +244,22 @@ impl SdkPaths {
         self.root.join("platform-tools").join(bin)
     }
 
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.root.join("tmp")
+    }
+
+    pub fn system_image_dir(&self, package: &str) -> PathBuf {
+        package
+            .split(';')
+            .fold(self.root.clone(), |acc, part| acc.join(part))
+    }
+
+    pub fn has_system_image(&self, package: &str) -> bool {
+        self.system_image_dir(package)
+            .join("source.properties")
+            .exists()
+    }
+
     pub fn avd_config_ini(&self, avd_name: &str) -> PathBuf {
         self.avd_home
             .join(format!("{avd_name}.avd"))
@@ -258,47 +283,69 @@ where
 {
     let target = HostTarget::detect()?;
     let paths = SdkPaths::from_config(config);
+    let image = target.system_image_package();
+    let needs_packages =
+        !paths.adb().exists() || !paths.emulator().exists() || !paths.has_system_image(image);
+
+    if needs_packages {
+        let drives = detect_storage_drives();
+        if let Some(drive) = find_drive_for_path(&paths.root, &drives) {
+            if drive.available_bytes < MIN_SDK_FREE_BYTES {
+                return Err(SdkError::InsufficientDiskSpace {
+                    path: paths.root,
+                    available_bytes: drive.available_bytes,
+                    required_bytes: MIN_SDK_FREE_BYTES,
+                });
+            }
+        }
+    }
 
     io_ctx("creating SDK root directory", &paths.root, fs::create_dir_all(&paths.root))?;
     io_ctx("creating AVD directory", &paths.avd_home, fs::create_dir_all(&paths.avd_home))?;
 
-    if !paths.java_bin().exists() {
-        report(0.06, "Fetching portable OpenJDK 17 runtime...");
-        download_and_extract_portable_jdk(&target, &paths)?;
-        report(0.16, "Portable OpenJDK 17 runtime ready");
-    }
+    let result = (|| -> Result<(), SdkError> {
+        if !paths.java_bin().exists() {
+            report(0.06, "Fetching portable OpenJDK 17 runtime...");
+            download_and_extract_portable_jdk(&target, &paths)?;
+            report(0.16, "Portable OpenJDK 17 runtime ready");
+        }
 
-    if !paths.sdkmanager().exists() {
-        report(0.22, "Downloading Android Command Line Tools");
-        download_and_extract_cmdline_tools(&target, &paths.root)?;
-    }
+        if !paths.sdkmanager().exists() {
+            report(0.22, "Downloading Android Command Line Tools");
+            download_and_extract_cmdline_tools(&target, &paths.root)?;
+        }
 
-    if !paths.adb().exists() || !paths.emulator().exists() {
-        report(0.36, "Accepting Android SDK licenses");
-        accept_licenses(&paths)?;
+        if needs_packages {
+            report(0.36, "Accepting Android SDK licenses");
+            accept_licenses(&paths)?;
 
-        report(0.48, "Installing platform-tools, emulator, and Google Play image");
-        let image = target.system_image_package();
-        run_sdk_cmd(
-            &paths,
-            &paths.sdkmanager(),
-            &[
-                &format!("--sdk_root={}", paths.root.display()),
-                "platform-tools",
-                "emulator",
-                image,
-            ],
-            None,
-        )?;
-    }
+            report(0.48, "Installing platform-tools, emulator, and Google Play image");
+            run_sdk_cmd(
+                &paths,
+                &paths.sdkmanager(),
+                &[
+                    &format!("--sdk_root={}", paths.root.display()),
+                    "platform-tools",
+                    "emulator",
+                    image,
+                ],
+                None,
+            )?;
+        }
 
-    if !paths.avd_config_ini(&config.avd_name).exists() {
-        report(0.72, "Provisioning pixel_tablet AVD (TFT_Device)");
-        create_tft_avd(&paths, &target, config)?;
-    } else {
-        // Keep CPU, RAM, GPU, and 1080p LCD directives aligned with current settings.
-        patch_avd_config_ini(&paths.avd_config_ini(&config.avd_name), config)?;
-    }
+        if !paths.avd_config_ini(&config.avd_name).exists() {
+            report(0.72, "Provisioning pixel_tablet AVD (TFT_Device)");
+            create_tft_avd(&paths, &target, config)?;
+        } else {
+            // Keep CPU, RAM, GPU, and 1080p LCD directives aligned with current settings.
+            patch_avd_config_ini(&paths.avd_config_ini(&config.avd_name), config)?;
+        }
+
+        Ok(())
+    })();
+
+    let _ = fs::remove_dir_all(paths.tmp_dir());
+    result?;
 
     report(0.82, "SDK and AVD ready");
     Ok(paths)
@@ -677,6 +724,8 @@ pub fn run_sdk_cmd(
 ) -> Result<String, SdkError> {
     let jdk_home = paths.canonical_jdk_home();
     let merged_path = build_jdk_prepended_path(&jdk_home);
+    let tmp_dir = paths.tmp_dir();
+    io_ctx("creating SDK temp directory", &tmp_dir, fs::create_dir_all(&tmp_dir))?;
 
     let mut cmd = Command::new(program);
     cmd.args(args)
@@ -685,6 +734,9 @@ pub fn run_sdk_cmd(
         .env("ANDROID_AVD_HOME", &paths.avd_home)
         .env("JAVA_HOME", &jdk_home)
         .env("PATH", &merged_path)
+        .env("TMP", &tmp_dir)
+        .env("TEMP", &tmp_dir)
+        .env("TMPDIR", &tmp_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

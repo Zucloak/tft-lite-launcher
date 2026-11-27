@@ -5,7 +5,7 @@ mod launcher;
 mod sdk;
 mod theme;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::Result;
@@ -15,8 +15,9 @@ use egui::{
 };
 
 use crate::config::{
-    detect_host_hardware, AppConfig, DisplayMode, GraphicsBackend, HostHardware, MAX_CPU_CORES,
-    MIN_CPU_CORES,
+    detect_host_hardware, detect_storage_drives, find_drive_for_path, format_bytes_gb, AppConfig,
+    DisplayMode, GraphicsBackend, HostHardware, StorageDrive, MAX_CPU_CORES, MIN_CPU_CORES,
+    MIN_SDK_FREE_BYTES,
 };
 use crate::icons::{icon_image, IconKind, IconStyle};
 use crate::keymapper::KeymapperService;
@@ -48,6 +49,7 @@ struct TftLiteApp {
     sdk_dir_input: String,
     host_summary: String,
     host_hardware: HostHardware,
+    storage_drives: Vec<StorageDrive>,
     system_image: String,
     launch_state: LaunchState,
     progress: f32,
@@ -72,6 +74,7 @@ impl TftLiteApp {
         let config = AppConfig::load_or_default().unwrap_or_default();
         let sdk_dir_input = config.sdk_dir.display().to_string();
         let host_hardware = detect_host_hardware();
+        let storage_drives = detect_storage_drives();
 
         let (host_summary, system_image) = match HostTarget::detect() {
             Ok(target) => (
@@ -102,6 +105,7 @@ impl TftLiteApp {
             sdk_dir_input,
             host_summary,
             host_hardware,
+            storage_drives,
             system_image,
             launch_state: LaunchState::Idle,
             progress: 0.0,
@@ -118,6 +122,7 @@ impl TftLiteApp {
     }
 
     fn drain_events(&mut self) {
+        let mut refresh_drives = false;
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 LaunchEvent::Log(entry) => {
@@ -135,22 +140,29 @@ impl TftLiteApp {
                 }
                 LaunchEvent::GameRunning => {
                     self.launch_state = LaunchState::Running;
+                    refresh_drives = true;
                 }
                 LaunchEvent::Stopped => {
                     self.launch_state = LaunchState::Idle;
                     self.progress = 0.0;
                     self.progress_stage = "Ready to launch".to_owned();
+                    refresh_drives = true;
                 }
                 LaunchEvent::Failed(message) => {
                     self.launch_state = LaunchState::Error(message);
+                    refresh_drives = true;
                 }
             }
+        }
+        if refresh_drives {
+            self.storage_drives = detect_storage_drives();
         }
     }
 
     fn persist_config(&mut self) {
         self.config.sdk_dir = PathBuf::from(self.sdk_dir_input.trim());
         self.config.sanitize();
+        self.sdk_dir_input = self.config.sdk_dir.display().to_string();
         self.keymapper.sync(
             self.config.keymapper_enabled,
             self.config.avd_name.clone(),
@@ -172,6 +184,55 @@ impl TftLiteApp {
                 self.logs
                     .push(LogEntry::new("Config", LogLevel::Error, msg));
             }
+        }
+    }
+
+    fn select_sdk_dir(&mut self, dir: PathBuf) {
+        self.sdk_dir_input = dir.display().to_string();
+        self.config.sdk_dir = dir;
+        self.persist_config();
+        if matches!(self.launch_state, LaunchState::Error(_)) {
+            self.launch_state = LaunchState::Idle;
+            self.progress = 0.0;
+            self.progress_stage = "Ready to launch".to_owned();
+        }
+    }
+
+    fn render_storage_drive_picker(&mut self, ui: &mut egui::Ui, id_salt: &str, enabled: bool) {
+        let current_path = Path::new(self.sdk_dir_input.trim());
+        let active_drive = find_drive_for_path(current_path, &self.storage_drives);
+        let active_mount = active_drive.map(|d| d.mount_point.clone());
+        let selected_label = match active_drive {
+            Some(drive) => format!(
+                "{} ({} free)",
+                drive.display_name,
+                format_bytes_gb(drive.available_bytes)
+            ),
+            None => "Custom Path".to_owned(),
+        };
+
+        let mut chosen_dir: Option<PathBuf> = None;
+        ui.add_enabled_ui(enabled, |ui| {
+            egui::ComboBox::from_id_salt(id_salt)
+                .selected_text(selected_label)
+                .show_ui(ui, |ui| {
+                    for drive in &self.storage_drives {
+                        let is_selected = active_mount.as_ref() == Some(&drive.mount_point);
+                        let space = format_bytes_gb(drive.available_bytes);
+                        let text = if drive.available_bytes < MIN_SDK_FREE_BYTES {
+                            format!("{} — {space} free (Low space)", drive.display_name)
+                        } else {
+                            format!("{} — {space} free", drive.display_name)
+                        };
+                        if ui.selectable_label(is_selected, text).clicked() {
+                            chosen_dir = Some(drive.sdk_dir.clone());
+                        }
+                    }
+                });
+        });
+
+        if let Some(dir) = chosen_dir {
+            self.select_sdk_dir(dir);
         }
     }
 
@@ -377,6 +438,9 @@ impl TftLiteApp {
                     .min_size(Vec2::new(146.0, 38.0));
 
                     if ui.add(play_btn).clicked() {
+                        if self.sdk_dir_input.trim() != self.config.sdk_dir.to_string_lossy() {
+                            self.persist_config();
+                        }
                         self.launch_state = LaunchState::Provisioning;
                         self.progress = 0.04;
                         self.progress_stage = "Starting setup pipeline".to_owned();
@@ -461,9 +525,13 @@ impl TftLiteApp {
         self.theme.hairline(ui);
         ui.add_space(18.0);
 
-        // Two compact status rows separated strictly by a hairline rule
+        // Compact status rows separated by hairline rules
         let paths = SdkPaths::from_config(&self.config);
         let sdk_ready = paths.is_provisioned(&self.config.avd_name);
+        let is_active = matches!(
+            self.launch_state,
+            LaunchState::Provisioning | LaunchState::Running | LaunchState::PlayStoreRequired
+        );
 
         ui.horizontal(|ui| {
             ui.add(icon_image(
@@ -481,8 +549,10 @@ impl TftLiteApp {
                 ui,
                 "Automated Play Store Provisioning",
                 &format!(
-                    "Host: {}\nImage: {}\nDownloads Google Command Line Tools locally with Play Integrity and libhoudini ARM translation.",
-                    self.host_summary, self.system_image
+                    "Host: {}\nImage: {}\nLocation: {}\nDownloads Google Command Line Tools locally with Play Integrity and libhoudini ARM translation.",
+                    self.host_summary,
+                    self.system_image,
+                    paths.root.display()
                 ),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -497,6 +567,76 @@ impl TftLiteApp {
                 );
             });
         });
+
+        ui.add_space(14.0);
+        self.theme.hairline(ui);
+        ui.add_space(14.0);
+
+        ui.horizontal(|ui| {
+            ui.add(icon_image(
+                IconKind::Folder,
+                IconStyle::Stroke,
+                15.0,
+                self.theme.text_secondary,
+            ));
+            ui.label(RichText::new("Storage Drive").color(self.theme.text_primary));
+            self.theme.info_tooltip(
+                ui,
+                "SDK & Emulator Storage Disk",
+                &format!(
+                    "Current SDK directory:\n{}\n\nSelect any drive with at least 8 GB free space before provisioning.",
+                    paths.root.display()
+                ),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.render_storage_drive_picker(ui, "launcher_storage_drive", !is_active);
+            });
+        });
+
+        if !sdk_ready && !is_active {
+            let current_drive_low = find_drive_for_path(&paths.root, &self.storage_drives)
+                .filter(|d| d.available_bytes < MIN_SDK_FREE_BYTES)
+                .map(|d| (d.display_name.clone(), d.available_bytes));
+            let best_alternative = self
+                .storage_drives
+                .iter()
+                .filter(|d| d.available_bytes >= MIN_SDK_FREE_BYTES)
+                .max_by_key(|d| d.available_bytes)
+                .map(|d| (d.display_name.clone(), d.available_bytes, d.sdk_dir.clone()));
+
+            if let Some((cur_name, cur_bytes)) = current_drive_low {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{cur_name} has {} free (~8.0 GB required for Android SDK & Play image).",
+                            format_bytes_gb(cur_bytes)
+                        ))
+                        .size(12.0)
+                        .color(self.theme.gold),
+                    );
+                    if let Some((best_name, best_bytes, best_dir)) = best_alternative {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let switch_btn = Button::new(
+                                RichText::new(format!(
+                                    "Use {best_name} ({})",
+                                    format_bytes_gb(best_bytes)
+                                ))
+                                .size(12.0)
+                                .strong()
+                                .color(self.theme.gold_text),
+                            )
+                            .fill(self.theme.gold)
+                            .stroke(Stroke::NONE)
+                            .rounding(Rounding::same(self.theme.rounding_sm));
+                            if ui.add(switch_btn).clicked() {
+                                self.select_sdk_dir(best_dir);
+                            }
+                        });
+                    }
+                });
+            }
+        }
 
         ui.add_space(14.0);
         self.theme.hairline(ui);
@@ -772,7 +912,7 @@ impl TftLiteApp {
         self.theme.hairline(ui);
         ui.add_space(20.0);
 
-        // SDK Path
+        // SDK Path & Storage Drive
         ui.horizontal(|ui| {
             ui.add(icon_image(
                 IconKind::Folder,
@@ -781,7 +921,7 @@ impl TftLiteApp {
                 self.theme.text_secondary,
             ));
             ui.label(
-                RichText::new("Android SDK Directory")
+                RichText::new("Storage Drive & SDK Directory")
                     .size(13.5)
                     .color(self.theme.text_primary),
             );
@@ -790,6 +930,12 @@ impl TftLiteApp {
                 "Local SDK Storage",
                 "Google Command Line Tools, platform-tools, emulator binaries, and the TFT_Device AVD live inside this folder.",
             );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button("Refresh").clicked() {
+                    self.storage_drives = detect_storage_drives();
+                }
+                self.render_storage_drive_picker(ui, "settings_storage_drive", true);
+            });
         });
         ui.add_space(8.0);
         ui.add_sized(
@@ -814,6 +960,7 @@ impl TftLiteApp {
             }
 
             if ui.button("Reset Defaults").clicked() {
+                self.storage_drives = detect_storage_drives();
                 self.config = AppConfig::default();
                 self.sdk_dir_input = self.config.sdk_dir.display().to_string();
                 self.persist_config();
