@@ -1,4 +1,4 @@
-use std::fs;
+﻿use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -76,7 +76,7 @@ pub struct HostHardware {
 pub fn detect_host_hardware() -> HostHardware {
     let sys = System::new_with_specifics(
         RefreshKind::new()
-            .with_cpu(CpuRefreshKind::nothing())
+            .with_cpu(CpuRefreshKind::new())
             .with_memory(MemoryRefreshKind::everything()),
     );
 
