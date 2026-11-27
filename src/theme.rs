@@ -1,4 +1,4 @@
-use egui::{
+﻿use egui::{
     Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Pos2, Rect, Response,
     Rounding, Sense, Stroke, Style, TextStyle, Ui, Vec2, Visuals,
 };
@@ -143,11 +143,9 @@ impl Theme {
         let mut fonts = FontDefinitions::default();
 
         fonts.font_data.insert(
-            "inter".to_owned(),
             FontData::from_static(include_bytes!("../assets/fonts/Inter-Regular.ttf")),
         );
         fonts.font_data.insert(
-            "jetbrains_mono".to_owned(),
             FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")),
         );
 
@@ -155,13 +153,13 @@ impl Theme {
             .families
             .entry(FontFamily::Proportional)
             .or_default()
-            .insert(0, "inter".to_owned());
+            .insert(0, );
 
         fonts
             .families
             .entry(FontFamily::Monospace)
             .or_default()
-            .insert(0, "jetbrains_mono".to_owned());
+            .insert(0, );
 
         ctx.set_fonts(fonts);
     }
@@ -316,3 +314,4 @@ impl Theme {
         }
     }
 }
+
