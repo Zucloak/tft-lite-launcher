@@ -137,9 +137,8 @@ impl Theme {
         ctx.set_style(style);
     }
 
-    /// Configures typography for the launcher. Currently falls back to egui's
-    /// built-in proportional and monospace fonts so builds succeed without
-    /// external font asset files.
+    /// Configures typography for the launcher using egui's built-in proportional
+    /// and monospace fonts so builds succeed without external font asset files.
     fn install_fonts(&self, ctx: &Context) {
         let fonts = FontDefinitions::default();
         ctx.set_fonts(fonts);
