@@ -118,21 +118,18 @@ impl Theme {
         style.text_styles.insert(
             TextStyle::Heading,
             FontId::new(19.0, FontFamily::Proportional),
-        );
         style
             .text_styles
             .insert(TextStyle::Body, FontId::new(13.5, FontFamily::Proportional));
         style.text_styles.insert(
             TextStyle::Button,
             FontId::new(13.0, FontFamily::Proportional),
-        );
         style
             .text_styles
             .insert(TextStyle::Small, FontId::new(11.5, FontFamily::Proportional));
         style.text_styles.insert(
             TextStyle::Monospace,
             FontId::new(12.0, FontFamily::Monospace),
-        );
 
         ctx.set_style(style);
     }
@@ -142,12 +139,6 @@ impl Theme {
     fn install_fonts(&self, ctx: &Context) {
         let mut fonts = FontDefinitions::default();
 
-        fonts.font_data.insert(
-            FontData::from_static(include_bytes!("../assets/fonts/Inter-Regular.ttf")),
-        );
-        fonts.font_data.insert(
-            FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")),
-        );
 
         fonts
             .families
@@ -177,12 +168,10 @@ impl Theme {
         let (rect, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), 1.0),
             Sense::hover(),
-        );
         ui.painter().hline(
             rect.x_range(),
             rect.center().y,
             Stroke::new(1.0, self.hairline),
-        );
     }
 
     /// Renders a muted 14px information-circle Hugeicon that reveals an elevated
@@ -206,13 +195,11 @@ impl Theme {
                         .size(12.0)
                         .strong()
                         .color(self.text_primary),
-                );
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(body)
                         .size(11.5)
                         .color(self.text_secondary),
-                );
             });
         });
     }
@@ -265,7 +252,6 @@ impl Theme {
                     self.hairline
                 },
             ),
-        );
 
         // Warm gold illuminated fill bar
         let frac = ((*value - min) as f32 / (max - min).max(1) as f32).clamp(0.0, 1.0);
@@ -273,7 +259,6 @@ impl Theme {
         let fill_rect = Rect::from_min_size(
             visual_rect.min,
             Vec2::new(fill_width.min(visual_rect.width()), visual_rect.height()),
-        );
         painter.rect_filled(fill_rect, radius, self.gold_fill);
 
         // Label (left) and crisp tabular value (right)
@@ -283,14 +268,12 @@ impl Theme {
             label,
             FontId::new(12.5, FontFamily::Proportional),
             self.text_primary,
-        );
         painter.text(
             Pos2::new(visual_rect.right() - 12.0, visual_rect.center().y),
             Align2::RIGHT_CENTER,
             value_text,
             FontId::new(12.0, FontFamily::Monospace),
             self.gold,
-        );
 
         response
     }
@@ -300,7 +283,6 @@ impl Theme {
         let (rect, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), 3.0),
             Sense::hover(),
-        );
         let rounding = Rounding::same(1.5);
         let painter = ui.painter();
         painter.rect_filled(rect, rounding, Color32::from_rgba_unmultiplied(255, 255, 255, 18));
@@ -309,7 +291,6 @@ impl Theme {
             let fill_rect = Rect::from_min_size(
                 rect.min,
                 Vec2::new(rect.width() * clamped, rect.height()),
-            );
             painter.rect_filled(fill_rect, rounding, active_color);
         }
     }
