@@ -9,7 +9,7 @@ The launcher separates UI rendering from heavy subprocess management so the inte
 1. **SDK & Portable OpenJDK 17 Provisioning (`src/sdk.rs`)**
    - Detects the host operating system (`windows`, `macos`, `linux`) and CPU architecture (`x86_64` or `aarch64`).
    - Checks for `./android-sdk/jdk/bin/java` (or `java.exe` on Windows). If missing, automatically downloads Eclipse Temurin OpenJDK 17 from the official Adoptium API (`api.adoptium.net`), safely extracts and flattens it into `./android-sdk/jdk`, and injects canonicalized `JAVA_HOME` + prepended `PATH` into every `sdkmanager` and `avdmanager` subprocess—requiring zero host Java installation.
-   - Downloads Google's official Android Command Line Tools archive directly from `dl.google.com` and extracts it into `./android-sdk/cmdline-tools/latest`.
+   - Downloads Google's official Android Command Line Tools archive directly from `://google.com` and extracts it into `./android-sdk/cmdline-tools/latest`.
    - Invokes `sdkmanager --licenses` and installs `platform-tools`, `emulator`, and the unrooted Google Play system image matching the host CPU:
      - `system-images;android-34;google_apis_playstore;x86_64` on Intel/AMD hosts (includes Play Integrity support and Intel `libhoudini` ARM translation).
      - `system-images;android-34;google_apis_playstore;arm64-v8a` on Apple Silicon and ARM64 hosts.
@@ -63,15 +63,6 @@ All UI iconography uses bundled Hugeicons SVG files in `#FFFFFF` for runtime mul
 - `assets/icons/chevron-down-stroke.svg`
 - `assets/icons/chevron-down-solid.svg`
 
-### Fonts (`assets/fonts/`)
-
-Place the following TrueType font files in `assets/fonts/` before running `cargo build`:
-
-- `assets/fonts/Inter-Regular.ttf`
-- `assets/fonts/JetBrainsMono-Regular.ttf`
-
-The release workflow in `.github/workflows/release.yml` automatically fetches both fonts during CI builds if they are not checked into Git.
-
 ## Build Prerequisites
 
 ### All Platforms
@@ -111,7 +102,7 @@ Note: Global key listening via `rdev` and coordinate clicks via `enigo` require 
 ## Building From Source
 
 ```bash
-git clone https://github.com/tft-lite-launcher/tft-lite-launcher.git
+git clone https://github.com
 cd tft-lite-launcher
 cargo build --release
 ./target/release/tft-lite-launcher
@@ -163,16 +154,3 @@ Log out and log back in for group membership changes to take effect.
 
 If host OpenGL/Vulkan drivers cause rendering issues with `-gpu host`, switch **Graphics Backend** in the `Settings` view from `Host / Native GPU` to `ANGLE / DirectX 11` (`-gpu angle_indirect`) or `SwiftShader` (`-gpu swiftshader_indirect`) and relaunch.
 
-### Keybinds Do Not Trigger Inside Emulator
-
-- Verify **Keymapper Active** is enabled in the `Hotkeys` view.
-- Confirm the Android Emulator window (`TFT_Device`) is currently focused; keybinds intentionally ignore input when any other desktop application has focus.
-- On macOS, confirm the launcher binary is checked under Privacy & Security, Accessibility and Input Monitoring.
-
-## Security & Checksum Verification
-
-Every release and build publishes a `SHA256SUMS.txt` manifest alongside the compiled binaries. See `SECURITY.md` for checksum verification commands and private vulnerability reporting instructions.
-
-## License
-
-Licensed under the Apache License, Version 2.0 (`Apache-2.0`). See `LICENSE` for the full license text.
