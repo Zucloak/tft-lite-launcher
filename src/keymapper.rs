@@ -50,9 +50,10 @@ impl KeymapperService {
                 }
             };
 
+            let callback_tx = tx.clone();
             let callback = move |event: Event| {
                 if let EventType::KeyPress(key) = event.event_type {
-                    handle_keypress(key, &listener_state, &mut enigo, &tx);
+                    handle_keypress(key, &listener_state, &mut enigo, &callback_tx);
                 }
             };
 

@@ -70,11 +70,11 @@ impl Theme {
         visuals.faint_bg_color = self.glass_surface;
         visuals.extreme_bg_color = Color32::from_rgb(0x07, 0x09, 0x0D);
         visuals.code_bg_color = Color32::from_rgb(0x0C, 0x10, 0x17);
-        visuals.window_stroke = Stroke::new(1.0, self.hairline_strong);
+        visuals.window_stroke = Stroke::new(1.0_f32, self.hairline_strong);
         visuals.window_rounding = Rounding::same(self.rounding_md);
         visuals.menu_rounding = Rounding::same(self.rounding_md);
         visuals.selection.bg_fill = self.gold_fill;
-        visuals.selection.stroke = Stroke::new(1.0, self.gold);
+        visuals.selection.stroke = Stroke::new(1.0_f32, self.gold);
         visuals.hyperlink_color = self.teal;
         visuals.warn_fg_color = self.gold;
         visuals.error_fg_color = self.danger;
@@ -83,26 +83,26 @@ impl Theme {
 
         visuals.widgets.noninteractive.bg_fill = self.canvas;
         visuals.widgets.noninteractive.weak_bg_fill = self.canvas;
-        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.hairline);
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, self.text_secondary);
+        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, self.hairline);
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, self.text_secondary);
         visuals.widgets.noninteractive.rounding = r_sm;
 
         visuals.widgets.inactive.bg_fill = self.glass_surface;
         visuals.widgets.inactive.weak_bg_fill = self.glass_surface;
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, self.hairline);
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, self.text_primary);
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, self.hairline);
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, self.text_primary);
         visuals.widgets.inactive.rounding = r_sm;
 
         visuals.widgets.hovered.bg_fill = self.glass_hover;
         visuals.widgets.hovered.weak_bg_fill = self.glass_hover;
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, self.hairline_strong);
-        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, self.text_primary);
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, self.hairline_strong);
+        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, self.text_primary);
         visuals.widgets.hovered.rounding = r_sm;
 
         visuals.widgets.active.bg_fill = self.gold_tint;
         visuals.widgets.active.weak_bg_fill = self.gold_tint;
-        visuals.widgets.active.bg_stroke = Stroke::new(1.0, self.gold);
-        visuals.widgets.active.fg_stroke = Stroke::new(1.0, self.text_primary);
+        visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, self.gold);
+        visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, self.text_primary);
         visuals.widgets.active.rounding = r_sm;
 
         let mut style = Style {
@@ -147,7 +147,7 @@ impl Theme {
     pub fn popover_frame(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.popover_bg)
-            .stroke(Stroke::new(1.0, self.hairline_strong))
+            .stroke(Stroke::new(1.0_f32, self.hairline_strong))
             .rounding(Rounding::same(self.rounding_md))
             .inner_margin(egui::Margin::symmetric(12.0, 10.0))
     }
@@ -161,7 +161,7 @@ impl Theme {
         ui.painter().hline(
             rect.x_range(),
             rect.center().y,
-            Stroke::new(1.0, self.hairline),
+            Stroke::new(1.0_f32, self.hairline),
         );
     }
 
@@ -240,7 +240,7 @@ impl Theme {
             radius,
             Color32::from_rgba_unmultiplied(255, 255, 255, 15),
             Stroke::new(
-                1.0,
+                1.0_f32,
                 if response.hovered() || response.dragged() {
                     self.hairline_strong
                 } else {

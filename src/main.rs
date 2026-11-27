@@ -198,7 +198,7 @@ impl TftLiteApp {
                 ui.painter().vline(
                     panel_rect.right(),
                     panel_rect.y_range(),
-                    Stroke::new(1.0, self.theme.hairline),
+                    Stroke::new(1.0_f32, self.theme.hairline),
                 );
 
                 ui.label(
@@ -241,7 +241,7 @@ impl TftLiteApp {
                         .color(self.theme.text_secondary),
                     )
                     .fill(self.theme.glass_surface)
-                    .stroke(Stroke::new(1.0, self.theme.hairline))
+                    .stroke(Stroke::new(1.0_f32, self.theme.hairline))
                     .rounding(Rounding::same(self.theme.rounding_sm))
                     .min_size(Vec2::new(ui.available_width(), 32.0));
 
@@ -578,7 +578,7 @@ impl TftLiteApp {
                 } else {
                     self.theme.glass_surface
                 })
-                .stroke(Stroke::new(1.0, self.theme.hairline))
+                .stroke(Stroke::new(1.0_f32, self.theme.hairline))
                 .rounding(Rounding::same(14.0));
 
                 if ui.add(toggle).clicked() {
@@ -943,7 +943,7 @@ impl eframe::App for TftLiteApp {
                 .frame(
                     egui::Frame::none()
                         .fill(Color32::from_rgb(0x08, 0x0B, 0x10))
-                        .stroke(Stroke::new(1.0, self.theme.hairline))
+                        .stroke(Stroke::new(1.0_f32, self.theme.hairline))
                         .inner_margin(egui::Margin::symmetric(18.0, 10.0)),
                 )
                 .show(ctx, |ui| {
