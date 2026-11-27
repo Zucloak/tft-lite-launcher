@@ -1,6 +1,6 @@
-﻿use egui::{
-    Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Pos2, Rect, Response,
-    Rounding, Sense, Stroke, Style, TextStyle, Ui, Vec2, Visuals,
+use egui::{
+    Align2, Color32, Context, FontDefinitions, FontFamily, FontId, Pos2, Rect, Response, Rounding,
+    Sense, Stroke, Style, TextStyle, Ui, Vec2, Visuals,
 };
 
 use crate::icons::{icon_image, IconKind, IconStyle};
@@ -58,8 +58,8 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Applies embedded Inter and JetBrains Mono fonts and overrides egui's
-    /// default dark visuals with flat obsidian surfaces and translucent popovers.
+    /// Applies font definitions and overrides egui's default dark visuals
+    /// with flat obsidian surfaces and translucent popovers.
     pub fn apply(&self, ctx: &Context) {
         self.install_fonts(ctx);
 
@@ -118,40 +118,30 @@ impl Theme {
         style.text_styles.insert(
             TextStyle::Heading,
             FontId::new(19.0, FontFamily::Proportional),
+        );
         style
             .text_styles
             .insert(TextStyle::Body, FontId::new(13.5, FontFamily::Proportional));
         style.text_styles.insert(
             TextStyle::Button,
             FontId::new(13.0, FontFamily::Proportional),
+        );
         style
             .text_styles
             .insert(TextStyle::Small, FontId::new(11.5, FontFamily::Proportional));
         style.text_styles.insert(
             TextStyle::Monospace,
             FontId::new(12.0, FontFamily::Monospace),
+        );
 
         ctx.set_style(style);
     }
 
-    /// Embeds Inter for general UI copy and JetBrains Mono for logs and keycaps
-    /// so typography remains identical across Windows, macOS, and Linux.
+    /// Configures typography for the launcher. Currently falls back to egui's
+    /// built-in proportional and monospace fonts so builds succeed without
+    /// external font asset files.
     fn install_fonts(&self, ctx: &Context) {
-        let mut fonts = FontDefinitions::default();
-
-
-        fonts
-            .families
-            .entry(FontFamily::Proportional)
-            .or_default()
-            .insert(0, );
-
-        fonts
-            .families
-            .entry(FontFamily::Monospace)
-            .or_default()
-            .insert(0, );
-
+        let fonts = FontDefinitions::default();
         ctx.set_fonts(fonts);
     }
 
@@ -168,13 +158,15 @@ impl Theme {
         let (rect, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), 1.0),
             Sense::hover(),
+        );
         ui.painter().hline(
             rect.x_range(),
             rect.center().y,
             Stroke::new(1.0, self.hairline),
+        );
     }
 
-    /// Renders a muted 14px information-circle Hugeicon that reveals an elevated
+    /// Renders a muted 14px information-circle icon that reveals an elevated
     /// translucent tooltip popover on hover.
     pub fn info_tooltip(&self, ui: &mut Ui, title: &str, body: &str) {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
@@ -195,11 +187,13 @@ impl Theme {
                         .size(12.0)
                         .strong()
                         .color(self.text_primary),
+                );
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(body)
                         .size(11.5)
                         .color(self.text_secondary),
+                );
             });
         });
     }
@@ -234,7 +228,9 @@ impl Theme {
             }
         }
 
-        let stretch = ui.ctx().animate_bool(response.id.with("drag"), response.dragged());
+        let stretch = ui
+            .ctx()
+            .animate_bool(response.id.with("drag"), response.dragged());
         let visual_rect = rect.expand2(Vec2::new(stretch * 2.0, stretch * 1.5));
         let radius = Rounding::same(visual_rect.height() * 0.5);
         let painter = ui.painter();
@@ -252,6 +248,7 @@ impl Theme {
                     self.hairline
                 },
             ),
+        );
 
         // Warm gold illuminated fill bar
         let frac = ((*value - min) as f32 / (max - min).max(1) as f32).clamp(0.0, 1.0);
@@ -259,6 +256,7 @@ impl Theme {
         let fill_rect = Rect::from_min_size(
             visual_rect.min,
             Vec2::new(fill_width.min(visual_rect.width()), visual_rect.height()),
+        );
         painter.rect_filled(fill_rect, radius, self.gold_fill);
 
         // Label (left) and crisp tabular value (right)
@@ -268,12 +266,14 @@ impl Theme {
             label,
             FontId::new(12.5, FontFamily::Proportional),
             self.text_primary,
+        );
         painter.text(
             Pos2::new(visual_rect.right() - 12.0, visual_rect.center().y),
             Align2::RIGHT_CENTER,
             value_text,
             FontId::new(12.0, FontFamily::Monospace),
             self.gold,
+        );
 
         response
     }
@@ -283,16 +283,21 @@ impl Theme {
         let (rect, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), 3.0),
             Sense::hover(),
+        );
         let rounding = Rounding::same(1.5);
         let painter = ui.painter();
-        painter.rect_filled(rect, rounding, Color32::from_rgba_unmultiplied(255, 255, 255, 18));
+        painter.rect_filled(
+            rect,
+            rounding,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+        );
         let clamped = fraction.clamp(0.0, 1.0);
         if clamped > 0.0 {
             let fill_rect = Rect::from_min_size(
                 rect.min,
                 Vec2::new(rect.width() * clamped, rect.height()),
+            );
             painter.rect_filled(fill_rect, rounding, active_color);
         }
     }
 }
-
